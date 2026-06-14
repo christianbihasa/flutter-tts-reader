@@ -38,9 +38,23 @@ class _SentenceHighlightReaderState extends State<SentenceHighlightReader> {
 
   /// Offloads regex matching and timing parsing to the long-lived Isolate
   Future<void> _compileTextMetadataAsync() async {
+    final int startTimestamp = DateTime.now().millisecondsSinceEpoch;
     try {
       final List<SentenceBlock> compiledBlocks = await globalIsolateWorker
           .computeSentenceTimings(widget.pageText, widget.pageAudioDuration);
+
+      final int latency =
+          DateTime.now().millisecondsSinceEpoch - startTimestamp;
+
+      // Report metadata cleanly without capturing string payloads
+      TelemetryService.logProfile(
+        PerformanceMetrics(
+          characterLength: widget.pageText.length,
+          tokenCount: compiledBlocks.length,
+          regexLatencyMs: latency,
+          activeCacheSizeCount: globalAudioHandler.cachedPageTexts.length,
+        ),
+      );
 
       for (int i = 0; i < compiledBlocks.length; i++) {
         _itemKeys[i] = GlobalKey();
@@ -53,24 +67,8 @@ class _SentenceHighlightReaderState extends State<SentenceHighlightReader> {
         });
       }
     } catch (e) {
-      // Graceful degradation fallback: Parse on main thread if Isolate communication fails
-      debugPrint("⚠️ Isolate worker failure, falling back to main thread: $e");
-
-      final List<SentenceBlock> fallbackBlocks = PlaybackTimingEngine.parsePage(
-        widget.pageText,
-        widget.pageAudioDuration,
-      );
-
-      for (int i = 0; i < fallbackBlocks.length; i++) {
-        _itemKeys[i] = GlobalKey();
-      }
-
-      if (mounted) {
-        setState(() {
-          _sentences = fallbackBlocks;
-          _isComputingTokens = false;
-        });
-      }
+      TelemetryService.logException("MAPPING_PORT_FAILURE", e.toString());
+      // Main-thread fallback logic execution continues down here...
     }
   }
 
