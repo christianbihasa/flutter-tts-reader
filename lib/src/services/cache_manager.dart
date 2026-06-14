@@ -46,4 +46,35 @@ class CacheManager {
       // Fail silently to safeguard background playback continuity
     }
   }
+
+  /// Emergency cache purge: Deletes all cached audio files
+  static Future<void> purgeAllCacheFiles() async {
+    try {
+      final Directory tempDir = await getTemporaryDirectory();
+      if (!await tempDir.exists()) return;
+
+      final List<FileSystemEntity> entities = tempDir.listSync();
+
+      for (final entity in entities) {
+        if (entity is File) {
+          final String fileName = entity.path
+              .split(Platform.pathSeparator)
+              .last;
+
+          // Delete all files matching our cache naming standard
+          if (fileName.startsWith(filePrefix) && fileName.endsWith('.wav')) {
+            try {
+              if (await entity.exists()) {
+                await entity.delete();
+              }
+            } catch (_) {
+              // Continue even if a single file fails to delete
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // Fail silently to prevent critical system failures
+    }
+  }
 }

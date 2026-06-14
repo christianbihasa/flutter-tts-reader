@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:audio_service/audio_service.dart';
 import '../../main.dart';
 import '../models/sentence_block.dart';
+import '../services/telemetry_service.dart';
 
 class SentenceHighlightReader extends StatefulWidget {
   final String pageText;
@@ -74,12 +75,13 @@ class _SentenceHighlightReaderState extends State<SentenceHighlightReader> {
 
   void _bindPositionPipeline() {
     // Monitor the background playback position tick rate
-    _positionSubscription = AudioService.positionStream.listen((
+    _positionSubscription = AudioService.position.listen((
       Duration currentPosition,
     ) {
       final localSentences = _sentences;
-      if (localSentences == null)
+      if (localSentences == null) {
         return; // Prevent parsing ticks prior to isolate layout initialization
+      }
 
       int matchedIndex = -1;
 
@@ -149,7 +151,7 @@ class _SentenceHighlightReaderState extends State<SentenceHighlightReader> {
                   padding: const EdgeInsets.all(8.0),
                   decoration: BoxDecoration(
                     color: isHighlighted
-                        ? Theme.of(context).primaryColor.withOpacity(0.12)
+                        ? Theme.of(context).primaryColor.withValues(alpha: 0.12)
                         : Colors.transparent,
                     borderRadius: BorderRadius.circular(8.0),
                   ),
@@ -165,7 +167,7 @@ class _SentenceHighlightReaderState extends State<SentenceHighlightReader> {
                           ? Theme.of(context).primaryColor
                           : Theme.of(
                               context,
-                            ).textTheme.bodyLarge?.color?.withOpacity(0.85),
+                            ).textTheme.bodyLarge?.color?.withValues(alpha: 0.85),
                     ),
                   ),
                 );

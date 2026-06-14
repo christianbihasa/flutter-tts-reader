@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:audio_service/audio_service.dart';
 import 'package:just_audio/just_audio.dart';
@@ -6,15 +7,20 @@ import 'package:path_provider/path_provider.dart';
 import '../services/cache_manager.dart';
 import '../services/session_manager.dart';
 import '../services/telemetry_service.dart';
-import '../main.dart';
+import '../parser/pdf_parser_service.dart';
+import '../parser/txt_parser_service.dart';
+import 'system_tts_service.dart';
 
-class ReaderAudioHandler extends BaseAudioHandler
-    with QueueHandler, PlaybackHandler {
+class ReaderAudioHandler extends BaseAudioHandler {
   final AudioPlayer _player = AudioPlayer();
-  List<String> _cachedPageTexts = [];
+  final PdfParserService _pdfParser = PdfParserService();
+  final TxtParserService _txtParser = TxtParserService();
+  final SystemTtsService _ttsService = SystemTtsService();
+  final List<String> _cachedPageTexts = [];
   int _currentPageIndex = 0;
   bool _isTransitioning = false;
   File? _currentDocument;
+  StreamSubscription<ProcessingState>? _processingStateSubscription;
 
   ReaderAudioHandler() {
     _initPlayerStreams();
@@ -22,10 +28,19 @@ class ReaderAudioHandler extends BaseAudioHandler
 
   int get currentPageIndex => _currentPageIndex;
   List<String> get cachedPageTexts => _cachedPageTexts;
+  
+  /// Returns the actual duration of the audio for a given page index
+  Duration? getPageAudioDuration(int pageIndex) {
+    if (_player.duration != null) {
+      return _player.duration;
+    }
+    // Return null if duration is not yet available
+    return null;
+  }
 
   void _initPlayerStreams() {
     _player.playbackEventStream.map(_transformEvent).pipe(playbackState);
-    _player.processingStateStream.listen((state) async {
+    _processingStateSubscription = _player.processingStateStream.listen((state) async {
       if (state == ProcessingState.completed) {
         await _handlePageCompletion();
       }
@@ -38,8 +53,20 @@ class ReaderAudioHandler extends BaseAudioHandler
     _cachedPageTexts.clear();
 
     try {
+      // Detect file type and use appropriate parser
+      final String filePath = file.path.toLowerCase();
+      final Stream<String> pageStream;
+      
+      if (filePath.endsWith('.pdf')) {
+        pageStream = _pdfParser.parseFilePageByPage(file);
+      } else if (filePath.endsWith('.txt')) {
+        pageStream = _txtParser.parseFilePageByPage(file);
+      } else {
+        throw UnsupportedError('File type not supported');
+      }
+
       // Enforce zero-lag text streams
-      await for (final pageText in pdfParser.parseFilePageByPage(file)) {
+      await for (final pageText in pageStream) {
         _cachedPageTexts.add(pageText);
       }
 
@@ -48,7 +75,7 @@ class ReaderAudioHandler extends BaseAudioHandler
         _cachedPageTexts.add("Document contains no readable text layers.");
       }
 
-      await ttsService.initialize();
+      await _ttsService.initialize();
       await loadPageChunk(_currentPageIndex);
     } catch (e) {
       TelemetryService.logException("PARSER_CRASH", e.toString());
@@ -86,7 +113,7 @@ class ReaderAudioHandler extends BaseAudioHandler
       File targetAudioFile = File(expectedFilePath);
       if (!await targetAudioFile.exists()) {
         try {
-          await ttsService.synthesizeTextToFile(
+          await _ttsService.synthesizeTextToFile(
             targetText,
             "${CacheManager.filePrefix}$_currentPageIndex",
           );
@@ -99,7 +126,7 @@ class ReaderAudioHandler extends BaseAudioHandler
           // Emergency Cache Flush: Wipe everything except the active workspace constraints
           await CacheManager.purgeAllCacheFiles();
           // Force a singular fallback execution retry
-          await ttsService.synthesizeTextToFile(
+          await _ttsService.synthesizeTextToFile(
             targetText,
             "${CacheManager.filePrefix}$_currentPageIndex",
           );
@@ -140,10 +167,11 @@ class ReaderAudioHandler extends BaseAudioHandler
       if (await File(nextFilePath).exists()) return;
 
       String nextText = _cachedPageTexts[nextPageIndex].trim();
-      if (nextText.isEmpty)
+      if (nextText.isEmpty) {
         nextText = "Next section contains unreadable assets.";
+      }
 
-      await ttsService.synthesizeTextToFile(
+      await _ttsService.synthesizeTextToFile(
         nextText,
         "${CacheManager.filePrefix}$nextPageIndex",
       );
@@ -169,6 +197,14 @@ class ReaderAudioHandler extends BaseAudioHandler
   Future<void> pause() => _player.pause();
   @override
   Future<void> stop() async => await _player.stop();
+  
+  /// Clean up resources when the audio handler is destroyed
+  Future<void> dispose() async {
+    await _processingStateSubscription?.cancel();
+    await _player.dispose();
+    await _ttsService.stop();
+  }
+  
   @override
   Future<void> seek(Duration position) => _player.seek(position);
   @override

@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:audio_service/audio_service.dart';
 
 import 'src/audio/reader_audio_handler.dart';
+import 'src/audio/audio_session_manager.dart';
 import 'src/services/session_manager.dart';
 import 'src/ui/sentence_highlight_reader.dart';
 import 'src/services/text_isolate_worker.dart';
@@ -16,6 +17,7 @@ late TextIsolateWorker globalIsolateWorker;
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // 1. Initialize audio service only once
   globalAudioHandler = await AudioService.init<ReaderAudioHandler>(
     builder: () => ReaderAudioHandler(),
     config: const AudioServiceConfig(
@@ -26,22 +28,15 @@ Future<void> main() async {
     ),
   );
 
-  // 1. Boot up the long-lived background thread worker immediately
+  // 2. Boot up the long-lived background thread worker
   globalIsolateWorker = TextIsolateWorker();
   await globalIsolateWorker.start();
 
-  // 2. Register foreground audio capability interfaces
-  globalAudioHandler = await AudioService.init<ReaderAudioHandler>(
-    builder: () => ReaderAudioHandler(),
-    config: const AudioServiceConfig(
-      androidNotificationChannelId:
-          'io.github.christianbihasa.flutter_tts_reader.channel.audio',
-      androidNotificationChannelName: 'Ebook Reader Audio Service',
-      androidNotificationOngoing: true,
-    ),
+  // 3. Set up audio session callbacks and configure media session
+  AudioSessionManager.setAudioCallbacks(
+    onPause: () => globalAudioHandler.pause(),
+    onPlay: () => globalAudioHandler.play(),
   );
-
-  // 3. Bind native OS audio focus interception hooks
   await AudioSessionManager.configureMediaSession();
 
   runApp(const MyApp());
@@ -58,9 +53,54 @@ class MyApp extends StatelessWidget {
         primaryColor: const Color(0xFF6750A4),
         useMaterial3: true,
       ),
-      home: const MainReaderScreen(),
+      home: const AppLifecycleWrapper(child: MainReaderScreen()),
     );
   }
+}
+
+/// Wrapper widget to manage app lifecycle and clean up resources
+class AppLifecycleWrapper extends StatefulWidget {
+  final Widget child;
+
+  const AppLifecycleWrapper({super.key, required this.child});
+
+  @override
+  State<AppLifecycleWrapper> createState() => _AppLifecycleWrapperState();
+}
+
+class _AppLifecycleWrapperState extends State<AppLifecycleWrapper> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.detached) {
+      _cleanupResources();
+    }
+  }
+
+  Future<void> _cleanupResources() async {
+    // Terminate background isolate
+    globalIsolateWorker.terminate();
+    
+    // Dispose audio handler resources
+    await globalAudioHandler.dispose();
+    
+    // Clean up audio session subscriptions
+    await AudioSessionManager.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 class MainReaderScreen extends StatefulWidget {
@@ -118,7 +158,9 @@ class _MainReaderScreenState extends State<MainReaderScreen> {
         allowedExtensions: ['pdf', 'txt'],
       );
       if (result == null || result.files.single.path == null) {
-        setState(() => _isProcessing = false);
+        if (mounted) {
+          setState(() => _isProcessing = false);
+        }
         return;
       }
 
@@ -126,36 +168,51 @@ class _MainReaderScreenState extends State<MainReaderScreen> {
       final String fileName = result.files.single.name;
 
       // OPTIMAL DECISION: Copy asset to secure permanent Application Storage Window
-      setState(
-        () => _statusMessage = "Securing file to application sandbox...",
-      );
+      if (mounted) {
+        setState(
+          () => _statusMessage = "Securing file to application sandbox...",
+        );
+      }
       final Directory appDocDir = await getApplicationDocumentsDirectory();
       final File permanentSavedFile = await pickedFile.copy(
         '${appDocDir.path}/$fileName',
       );
 
-      setState(() => _statusMessage = "Compiling document matrices...");
+      if (mounted) {
+        setState(() => _statusMessage = "Compiling document matrices...");
+      }
       await globalAudioHandler.initializeDocument(permanentSavedFile, 0);
       _mountActivePageDisplay();
 
       globalAudioHandler.play();
     } catch (e) {
-      setState(() => _isProcessing = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("Pipeline Rejection: $e")));
+      if (mounted) {
+        setState(() => _isProcessing = false);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Pipeline Rejection: $e")));
+      }
     }
   }
 
   void _mountActivePageDisplay() {
     final int idx = globalAudioHandler.currentPageIndex;
     if (idx < globalAudioHandler.cachedPageTexts.length) {
+      // Get the actual audio duration from the player or use a default fallback
+      final Duration audioDuration = globalAudioHandler.getPageAudioDuration(idx) ?? 
+          const Duration(seconds: 15);
+      
       setState(() {
         _activePageText = globalAudioHandler.cachedPageTexts[idx];
         _isProcessing = false;
       });
+      
+      // Update the UI with the correct audio duration
+      _currentPageAudioDuration = audioDuration;
     }
   }
+
+  Duration _currentPageAudioDuration = const Duration(seconds: 15);
 
   @override
   Widget build(BuildContext context) {
@@ -179,9 +236,7 @@ class _MainReaderScreenState extends State<MainReaderScreen> {
             Expanded(
               child: SentenceHighlightReader(
                 pageText: _activePageText!,
-                pageAudioDuration: const Duration(
-                  seconds: 15,
-                ), // Adjusted internally per map index
+                pageAudioDuration: _currentPageAudioDuration,
               ),
             ),
             _buildControlBar(),

@@ -12,7 +12,7 @@ class PdfParserService implements FileParserService {
     try {
       // 1. Get the total page count from the native platform
       final int? pageCount = await _channel.invokeMethod<int>(
-        'get JerryPageCount',
+        'getPageCount',
         {'path': file.path},
       );
       if (pageCount == null || pageCount <= 0) return;

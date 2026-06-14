@@ -10,6 +10,7 @@ dependencies:
   # Core Audio Stack
   just_audio: ^0.10.5
   audio_service: ^0.18.12
+  audio_session: ^0.1.16
   flutter_tts: ^4.1.0
 
   # File Processing & Utilities
