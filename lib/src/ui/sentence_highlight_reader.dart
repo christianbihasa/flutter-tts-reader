@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:audio_service/audio_service.dart';
-import '../../main.dart'; 
+import '../../main.dart';
 import '../models/sentence_block.dart';
 
 class SentenceHighlightReader extends StatefulWidget {
@@ -20,7 +20,8 @@ class SentenceHighlightReader extends StatefulWidget {
 }
 
 class _SentenceHighlightReaderState extends State<SentenceHighlightReader> {
-  late List<SentenceBlock> _sentences;
+  List<SentenceBlock>? _sentences;
+  bool _isComputingTokens = true;
   final ValueNotifier<int> _activeSentenceIndexNotifier = ValueNotifier<int>(
     -1,
   );
@@ -31,17 +32,45 @@ class _SentenceHighlightReaderState extends State<SentenceHighlightReader> {
   @override
   void initState() {
     super.initState();
-    _compileTextMetadata();
+    _compileTextMetadataAsync();
     _bindPositionPipeline();
   }
 
-  void _compileTextMetadata() {
-    _sentences = PlaybackTimingEngine.parsePage(
-      widget.pageText,
-      widget.pageAudioDuration,
-    );
-    for (int i = 0; i < _sentences.length; i++) {
-      _itemKeys[i] = GlobalKey();
+  /// Offloads regex matching and timing parsing to the long-lived Isolate
+  Future<void> _compileTextMetadataAsync() async {
+    try {
+      final List<SentenceBlock> compiledBlocks = await globalIsolateWorker
+          .computeSentenceTimings(widget.pageText, widget.pageAudioDuration);
+
+      for (int i = 0; i < compiledBlocks.length; i++) {
+        _itemKeys[i] = GlobalKey();
+      }
+
+      if (mounted) {
+        setState(() {
+          _sentences = compiledBlocks;
+          _isComputingTokens = false;
+        });
+      }
+    } catch (e) {
+      // Graceful degradation fallback: Parse on main thread if Isolate communication fails
+      debugPrint("⚠️ Isolate worker failure, falling back to main thread: $e");
+
+      final List<SentenceBlock> fallbackBlocks = PlaybackTimingEngine.parsePage(
+        widget.pageText,
+        widget.pageAudioDuration,
+      );
+
+      for (int i = 0; i < fallbackBlocks.length; i++) {
+        _itemKeys[i] = GlobalKey();
+      }
+
+      if (mounted) {
+        setState(() {
+          _sentences = fallbackBlocks;
+          _isComputingTokens = false;
+        });
+      }
     }
   }
 
@@ -50,9 +79,13 @@ class _SentenceHighlightReaderState extends State<SentenceHighlightReader> {
     _positionSubscription = AudioService.positionStream.listen((
       Duration currentPosition,
     ) {
+      final localSentences = _sentences;
+      if (localSentences == null)
+        return; // Prevent parsing ticks prior to isolate layout initialization
+
       int matchedIndex = -1;
 
-      for (final sentence in _sentences) {
+      for (final sentence in localSentences) {
         if (currentPosition >= sentence.startOffset &&
             currentPosition <= sentence.endOffset) {
           matchedIndex = sentence.index;
@@ -92,14 +125,19 @@ class _SentenceHighlightReaderState extends State<SentenceHighlightReader> {
 
   @override
   Widget build(BuildContext context) {
+    // UI Guard: Render a loading indicator while the background Isolate processes data strings
+    if (_isComputingTokens || _sentences == null) {
+      return const Center(child: CircularProgressIndicator.adaptive());
+    }
+
     return Container(
       color: Theme.of(context).scaffoldBackgroundColor,
       child: ListView.builder(
         controller: _scrollController,
         padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 24.0),
-        itemCount: _sentences.length,
+        itemCount: _sentences!.length,
         itemBuilder: (context, index) {
-          final sentence = _sentences[index];
+          final sentence = _sentences![index];
           return Padding(
             key: _itemKeys[index],
             padding: const EdgeInsets.symmetric(vertical: 6.0),

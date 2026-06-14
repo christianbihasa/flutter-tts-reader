@@ -7,8 +7,11 @@ import 'package:audio_service/audio_service.dart';
 import 'src/audio/reader_audio_handler.dart';
 import 'src/services/session_manager.dart';
 import 'src/ui/sentence_highlight_reader.dart';
+import 'src/services/text_isolate_worker.dart';
+
 
 late ReaderAudioHandler globalAudioHandler;
+late TextIsolateWorker globalIsolateWorker;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,6 +25,24 @@ Future<void> main() async {
       androidNotificationOngoing: true,
     ),
   );
+
+  // 1. Boot up the long-lived background thread worker immediately
+  globalIsolateWorker = TextIsolateWorker();
+  await globalIsolateWorker.start();
+
+  // 2. Register foreground audio capability interfaces
+  globalAudioHandler = await AudioService.init<ReaderAudioHandler>(
+    builder: () => ReaderAudioHandler(),
+    config: const AudioServiceConfig(
+      androidNotificationChannelId:
+          'io.github.christianbihasa.flutter_tts_reader.channel.audio',
+      androidNotificationChannelName: 'Ebook Reader Audio Service',
+      androidNotificationOngoing: true,
+    ),
+  );
+
+  // 3. Bind native OS audio focus interception hooks
+  await AudioSessionManager.configureMediaSession();
 
   runApp(const MyApp());
 }
@@ -92,7 +113,7 @@ class _MainReaderScreenState extends State<MainReaderScreen> {
     });
 
     try {
-      final result = await FilePicker.platform.pickFiles(
+      final result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['pdf', 'txt'],
       );
