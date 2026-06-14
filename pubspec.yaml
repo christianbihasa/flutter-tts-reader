@@ -2,6 +2,7 @@ name: flutterttsreader
 dependencies:
   flutter:
     sdk: flutter
+  shared_preferences: ^2.5.5
 
   # State Management & DI
   flutter_riverpod: ^3.3.2
