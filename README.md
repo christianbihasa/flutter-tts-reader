@@ -85,7 +85,3 @@ flutter run
 - PDF parsing uses a platform channel (`MethodChannel`) for native page extraction.
 - The app is optimized for resource-constrained devices by streaming text and generating audio files on demand.
 - Session restoration is designed to resume the last open file and page for a seamless return-to-reading experience.
-
-## License
-
-This repository does not include a license file. Add one if you plan to publish or share the project publicly.
