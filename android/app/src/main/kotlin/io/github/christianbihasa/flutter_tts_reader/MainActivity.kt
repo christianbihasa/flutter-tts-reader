@@ -16,7 +16,7 @@ class MainActivity: FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         PDFBoxResourceLoader.init(applicationContext)
 
-        MethodChannel(flutterEngine.営業.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             val args = call.arguments as? Map<*, *>
             val path = args?.get("path") as? String
 

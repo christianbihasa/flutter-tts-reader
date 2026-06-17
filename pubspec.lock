@@ -284,10 +284,9 @@ packages:
   file_picker:
     dependency: "direct main"
     description:
-      name: file_picker
-      sha256: f13a03000d942e476bc1ff0a736d2e9de711d2f89a95cd4c1d88f861c3348387
-      url: "https://pub.dev"
-    source: hosted
+      path: "patched_plugins/file_picker"
+      relative: true
+    source: path
     version: "11.0.2"
   fixnum:
     dependency: transitive
@@ -342,10 +341,9 @@ packages:
   flutter_tts:
     dependency: "direct main"
     description:
-      name: flutter_tts
-      sha256: ce5eb209b40e95f2f4a1397116c87ab2fcdff32257d04ed7a764e75894c03775
-      url: "https://pub.dev"
-    source: hosted
+      path: "patched_plugins/flutter_tts"
+      relative: true
+    source: path
     version: "4.2.5"
   flutter_web_plugins:
     dependency: transitive
